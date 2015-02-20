@@ -1,6 +1,8 @@
-# Eclipse project files
+# Project files
 .project
 .settings/
+.idea/
+*.iml
 
 # Erlang project stuff
 deps/
@@ -9,6 +11,7 @@ ebin/
 # Common project stuff
 build/
 tmp/
+env
 
 # Editor droppings
 *~
@@ -21,6 +24,7 @@ log/*
 *.tmp
 
 # Compiled binaries
+*.beam
 *.o
 *.a
 *.so
