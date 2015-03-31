@@ -19,7 +19,11 @@
 %% -------------------------------------------------------------------
 
 %%
-%%  @doc    The {@module} module provides operations.
+%%  @doc    The {@module} module provides operations for analyzing a rebar
+%%          dependency graph.
+%%
+%%  Run with escript for ease of use, or the main functionality can be
+%%  accessed through exported functions.
 %%
 -module(rebar_deps).
 
