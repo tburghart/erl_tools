@@ -27,8 +27,6 @@
 %%
 -module(rebar_deps).
 
--include("rebar_deps.hrl").
-
 %%======================================================================
 %%  Public API
 %%======================================================================
@@ -51,45 +49,70 @@
 -type label()   :: string().
 -type plist()   :: [{label(), path()}].
 
--type option()  :: label | out | format | top.
--type options() :: #{option() => string()}.
+-type option()  :: format | label | out | top.
+-type optval()  :: atom() | string().
 -type name()    :: string().
 -type url()     :: string().
--type repo()    :: {atom(), url()}.
+-type proto()   :: atom().
+-type repo()    :: {proto(), url()}.
 -type regex()   :: string().
 -type rev()     :: {atom(), string()} | string().
 -type vrec()    :: {regex(), rev()}.
--type used()    :: #{vrec() => [name()]}.
+-type usedl()   :: {vrec(), [name()]}.
+-type usedm()   :: #{vrec() => [name()]}.
 -type basho()   :: boolean().
 
--type drec()     :: {basho(), [used()]}.
+-type drecl()   :: {basho(), [usedl()]}.
+-type drecm()   :: {basho(), [usedm()]}.
 
--type dmap()    :: #{name() => drec()}.
--type dlist()   :: [{name(), drec()}].
+-type dmap()    :: #{name() => drecm()}.
+-type dlist()   :: [{name(), drecl()}].
 
 -type crec()    :: {name(), repo(), vrec()}.
 -type conf()    :: {name(), [crec()]}.
 -type clist()   :: [conf()].
 
 %%======================================================================
+%%  Macros
+%%======================================================================
+
+-define(REBAR_CFG,      "rebar.config").
+
+-define(SCRIPT_ABS,     abspath(escript:script_name())).
+-define(SCRIPT_DIR,     filename:dirname(?SCRIPT_ABS)).
+-define(SCRIPT_NAME,    filename:basename(escript:script_name())).
+
+-define(DOT_NODE_SHAPE, "box").
+-define(DOT_COLOR_DFLT, "blue").
+-define(DOT_COLOR_SING, "green").
+-define(DOT_COLOR_MULT, "red").
+
+%%======================================================================
 %%  API functions
 %%======================================================================
 
 -spec main([string()]) -> ok | no_return().
+%%
 %%  @doc    Escript main.
+%%
+%%  Invocation options are displayed by providing `-h` as a parameter.
+%%
 main(Args) ->
-    Cfg   = parse_args(Args),
-    Files = collect_files(maps:get(label, Cfg), maps:get(top, Cfg)),
+    ok    = parse_args(Args),
+    Files = collect_files(get_opt(label), get_opt(top)),
     Confs = collect_confs(Files),
     Deps  = collect_deps(Confs),
-    IoDev = case maps:get(out, Cfg, undefined) of
+    IoDev = case get_opt(out) of
         undefined ->
             standard_io;
         OutFile ->
             {ok, FD} = file:open(OutFile, [write]),
             FD
     end,
-    case maps:get(format, Cfg) of
+    % It's tempting to resolve the function dynamically, since we know the
+    % pattern, but if running interpretted from escript the functions won't
+    % be found.
+    case get_opt(format) of
         csv ->
             write_csv(IoDev, Deps);
         dot ->
@@ -105,35 +128,63 @@ main(Args) ->
     end.
 
 -spec write_csv(io:device(), dlist()) -> ok.
+%%
 %%  @doc    Write CSV to specified IO Device.
+%%
 write_csv(IoDev, Dlist) ->
     write_csv_head(IoDev, Dlist),
     write_csv_body(IoDev, Dlist),
     write_csv_foot(IoDev, Dlist).
 
 -spec write_dot(io:device(), dlist()) -> ok.
+%%
 %%  @doc    Write graph data to specified IO Device.
+%%
 write_dot(IoDev, Dlist) ->
     write_dot_head(IoDev, Dlist),
     write_dot_body(IoDev, Dlist),
     write_dot_foot(IoDev, Dlist).
 
 -spec write_txt(io:device(), dlist()) -> ok.
+%%
 %%  @doc    Write text to specified IO Device.
+%%
 write_txt(IoDev, Dlist) ->
     write_txt_head(IoDev, Dlist),
     write_txt_body(IoDev, Dlist),
     write_txt_foot(IoDev, Dlist).
 
 -spec collect_confs(plist()) -> clist().
+%%
+%%  @doc    Returns a list of tuples containing rebar config terms.
+%%
+%%  Each element of the list is in the form
+%%  `{Label, [{Package, {Proto, Repo}, {RegEx, Rev}}]}`
+%%  where `Label` is the name of a package and the associated list contains
+%%  one tuple for each package that depends on it.
+%%
 collect_confs(Paths) ->
     collect_confs(Paths, []).
 
 -spec collect_deps(clist()) -> dlist().
+%%
+%%  @doc    Returns a list of tuples containing rebar dependency information.
+%%
+%%  Each element of the list is in the form
+%%  `{Bflag, Label, {Proto, Repo}, [{{RegEx, Rev}, [Dependent]}]}`
+%%
+%%
 collect_deps(Confs) ->
     deps_to_list(collect_deps(Confs, maps:new())).
 
 -spec collect_files(string(), path()) -> plist().
+%%
+%%  @doc    Returns a list of tuples containing rebar config file information.
+%%
+%%  Each element of the list is in the form `{Label, Path}`, where `Label`
+%%  is the string representing the package name and `Path` is the absolute
+%%  path to a rebar config file.
+%%
 collect_files(Label, TopDir) ->
     RC = filename:join(TopDir, ?REBAR_CFG),
     case filelib:is_regular(RC) of
@@ -144,20 +195,53 @@ collect_files(Label, TopDir) ->
                 undefined ->
                     collect_deps_files(filename:join(TopDir, "deps"), Top);
                 Dir ->
-                    collect_deps_files(
-                        abspath(filename:absname(Dir, TopDir)), Top)
+                    collect_deps_files(abspath(Dir, TopDir), Top)
             end;
         _ ->
-            collect_dep_files(filename:join(TopDir, "deps"), [])
+            collect_deps_files(filename:join(TopDir, "deps"), [])
     end.
 
-
-
--spec abspath(Path :: [string()]) -> path().
+-spec abspath(Path :: string()) -> path().
+%%
 %%  @doc    Return the absolute path to a filesystem element with '.'
 %%          and '..' resolved.
+%%
+%%  If the specified path does not start with the platform's representation
+%%  of a 'root' directory, it is resolved relative to the current working
+%%  directory.
+%%
+%%  This operation is completed entirely through text manipulation without
+%%  side effects (the CWD may be obtained if necessary, but will not be
+%%  changed). As such, elements of the resulting path may not exist, and
+%%  whether the result contains symbolic links is not defined.
+%%
+%%  The result is equivalent to that of {@link filename:absname/1} with all
+%%  relative path segments resolved.
+%%
 abspath(Path) ->
-    abspath(lists:reverse(filename:split(filename:absname(Path))), []).
+    abspath_inner(lists:reverse(filename:split(filename:absname(Path))), []).
+
+-spec abspath(Path :: string(), Base :: path()) -> path().
+%%
+%%  @doc    Return the absolute path to a filesystem element with '.'
+%%          and '..' resolved.
+%%
+%%  If the specified `Path` does not start with the platform's representation
+%%  of a 'root' directory, it is resolved relative to the provided `Base`
+%%  directory, which is itself resolved as if by invoking {@link abspath/1}.
+%%
+%%  This operation is completed entirely through text manipulation without
+%%  side effects (the CWD may be obtained if necessary, but will not be
+%%  changed). As such, elements of the resulting path may not exist, and
+%%  whether the result contains symbolic links is not defined.
+%%
+%%  The result is equivalent to that of {@link filename:absname/2} with all
+%%  relative path segments resolved, and is assured to be absolute even when
+%%  the specified `Base` is not.
+%%
+abspath(Path, Base) ->
+    abspath_inner(lists:reverse(filename:split(
+        filename:absname(Path, filename:absname(Base)))), []).
 
 %%  @end
 %%======================================================================
@@ -169,7 +253,7 @@ abspath(Path) ->
 %%
 
 write_txt_head(IoDev, _Deps) ->
-    io:put_chars(IoDev, ?TXT_HEAD).
+    io:put_chars(IoDev, txt_header()).
 
 write_txt_body(_IoDev, []) ->
     ok;
@@ -235,23 +319,45 @@ write_csv_foot(_IoDev, _Deps) ->
 %%  Dot
 %%
 
-write_dot_head(IoDev, _Deps) ->
-    ok = io:put_chars(IoDev, "digraph RebarDeps {\n").
+write_dot_head(IoDev, Deps) ->
+    ok = io:put_chars(IoDev, dot_header()),
+    write_dot_attr(IoDev, Deps).
 
-write_dot_body(IoDev, Deps) ->
-    lists:foreach(
-        fun({_Bflag, Name, _, Vlist}) ->
-            lists:foreach(
-                fun({{_RE, _Rev}, Dlist}) ->
-                    lists:foreach(
-                        fun(Dep) ->
-                            ok = io:format(IoDev, "\t~s -> ~s;\n", [Dep, Name])
-                        end, Dlist)
-                end, Vlist)
-        end, Deps).
+write_dot_attr(IoDev, []) ->
+    io:nl(IoDev);
+write_dot_attr(IoDev, [{Bflag, Name, _Repo, Vlist} | Deps]) ->
+    Color = case length(Vlist) > 1 of
+        true ->
+            ?DOT_COLOR_MULT;
+        _ ->
+            ?DOT_COLOR_SING
+    end,
+    Owner = format_owner(Bflag),
+    ok = io:format(IoDev,
+        "\t~s [label=\"~s\\n~s\",color=~s]\n",
+        [Name, Name, Owner, Color]),
+    write_dot_attr(IoDev, Deps).
+
+write_dot_body(_IoDev, []) ->
+    ok;
+write_dot_body(IoDev, [{_Bflag, Name, _Repo, Vlist} | Deps]) ->
+    write_dot_elem(IoDev, Name, Vlist),
+    write_dot_body(IoDev, Deps).
+
+write_dot_elem(_IoDev, _Name, []) ->
+    ok;
+write_dot_elem(IoDev, Name, [{{_RE, _Rev}, Dlist} | Deps]) ->
+    write_dot_deps(IoDev, Name, Dlist),
+    write_dot_elem(IoDev, Name, Deps).
+
+write_dot_deps(_IoDev, _Name, []) ->
+    ok;
+write_dot_deps(IoDev, Name, [Dep | Deps]) ->
+    ok = io:format(IoDev, "\t~s -> ~s;\n", [Dep, Name]),
+    write_dot_deps(IoDev, Name, Deps).
 
 write_dot_foot(IoDev, _Deps) ->
-    ok = io:put_chars(IoDev, "}\n").
+    io:put_chars(IoDev, dot_footer()).
 
 %%
 %%  Formatters
@@ -260,14 +366,16 @@ write_dot_foot(IoDev, _Deps) ->
 format_dependents(Deps) ->
     string:join(Deps, "  ").
 
-format_owner(true)      -> "Basho";
-format_owner(false)     -> "Extern".
+format_owner(true)      -> "basho";
+format_owner(false)     -> "extern".
 
 format_rev({tag, S})    -> "t: " ++ S;
 format_rev({branch, S}) -> "b: " ++ S;
 format_rev({A, S})      -> io_lib:format("\t~s: ~s", [A, S]);
 format_rev([])          -> "HEAD";
 format_rev(S)           -> S.
+
+% unique_name(Name, Rev)  -> Name ++ " " ++ format_rev(Rev).
 
 %%
 %%  Collectors
@@ -277,9 +385,11 @@ format_rev(S)           -> S.
 deps_to_list(Dmap) ->
     deps_to_list(maps:to_list(Dmap), []).
 
--spec deps_to_list([tuple()], dlist()) -> dlist().
+-spec deps_to_list([{{name(), repo()}, drecm()}], dlist()) -> dlist().
 deps_to_list([], Dlist) ->
     lists:sort(Dlist);
+% As of Dialyzer 2.7.3 the loosely-typed maps:to_list/1 result causes
+% dialyzer to think the result dlist() may not be up to snuff. It's fine.
 deps_to_list([{{Name, Repo}, {Bflag, Vmap}} | Deps], Dlist) ->
     deps_to_list(Deps, Dlist ++ [{Bflag, Name, Repo, maps:to_list(Vmap)}]).
 
@@ -292,8 +402,7 @@ collect_deps([{Package, Crecs} | Confs], Deps) ->
 -spec collect_deps(name(), [crec()], dmap()) -> dmap().
 collect_deps(_, [], Deps) ->
     Deps;
-collect_deps(Package, [Crec | Crecs], Deps) ->
-    {Name, Repo, Vrec} = Crec,
+collect_deps(Package, [{Name, Repo, Vrec} | Crecs], Deps) ->
     Dkey = {Name, Repo},
     Drec = case maps:get(Dkey, Deps, undefined) of
         undefined ->
@@ -372,102 +481,108 @@ normalize_repo(Path) ->
 %% Command line handling
 %%
 
+-spec get_opt(option()) -> optval().
+get_opt(Key) ->
+    erlang:get({?MODULE, Key}).
+
+-spec set_opt(option(), optval()) -> optval() | undefined.
+set_opt(Key, Val) ->
+    erlang:put({?MODULE, Key}, Val).
+
 -spec usage() -> no_return().
 usage() ->
-    io:put_chars(standard_error, ?USAGE),
+    io:put_chars(standard_error, usage_text()),
     erlang:halt(1).
 
--spec parse_args([string()]) -> options() | no_return().
-parse_args(Args) ->
-    parse_args(Args, maps:new()).
-
--spec finish_args([string()], options()) -> options() | no_return().
-finish_args([], M0) ->
-    M1 = case maps:is_key(top, M0) of
-        true ->
-            M0;
-        _ ->
+-spec finish_args([string()]) -> ok | no_return().
+finish_args([]) ->
+    case get_opt(top) of
+        undefined ->
             {ok, CWD} = file:get_cwd(),
-            maps:put(top, CWD, M0)
-    end,
-    M2 = case maps:is_key(label, M1) of
-        true ->
-            M1;
+            set_opt(top, CWD);
         _ ->
-            L = filename:basename(maps:get(top, M1)),
-            maps:put(label, L, M1)
+            ok
     end,
-    M3 = case maps:is_key(format, M2) of
-        true ->
-            M2;
+    case get_opt(label) of
+        undefined ->
+            set_opt(label, filename:basename(get_opt(top)));
         _ ->
-            F = case maps:is_key(out, M2) of
-                true ->
-                    X = string:to_lower(filename:extension(maps:get(out, M2))),
-                    case X of
+            ok
+    end,
+    case get_opt(format) of
+        undefined ->
+            case get_opt(out) of
+                undefined ->
+                    set_opt(format, txt);
+                FP ->
+                    case string:to_lower(filename:extension(FP)) of
                         ".csv" ->
-                            csv;
+                            set_opt(format, csv);
                         ".dot" ->
-                            dot;
+                            set_opt(format, dot);
                         _ ->
-                            txt
-                    end;
-                _ ->
-                    txt
-            end,
-            maps:put(format, F, M2)
+                            set_opt(format, txt)
+                    end
+            end;
+        _ ->
+            ok
     end,
-    M3;
-finish_args(_, _) ->
+    ok;
+finish_args(_) ->
     io:put_chars(standard_error, "Error: extra parameters on command line\n"),
     usage().
 
--spec parse_args([string()], options()) -> options() | no_return().
-parse_args([], Accum) ->
-    finish_args([], Accum);
+-spec parse_args([string()]) -> ok | no_return().
+parse_args([])          -> finish_args([]);
+parse_args(["-h"|_])    -> usage();
+parse_args(["-f"])      -> missing_value("-f");
+parse_args(["-n"])      -> missing_value("-n");
+parse_args(["-o"])      -> missing_value("-o");
 
-parse_args(["-f"], _) -> missing_value("-f");
-parse_args(["-n"], _) -> missing_value("-n");
-parse_args(["-o"], _) -> missing_value("-o");
-
-parse_args(["-f", "text" | Opts], Accum) ->
-    parse_args(Opts, maps:put(format, txt, Accum));
-parse_args(["-f", "txt" | Opts], Accum) ->
-    parse_args(Opts, maps:put(format, txt, Accum));
-parse_args(["-f", "csv" | Opts], Accum) ->
-    parse_args(Opts, maps:put(format, csv, Accum));
-parse_args(["-f", "dot" | Opts], Accum) ->
-    parse_args(Opts, maps:put(format, dot, Accum));
-parse_args(["-f" | _], _) ->
+parse_args(["-f", "text" | Opts]) ->
+    set_opt(format, txt),
+    parse_args(Opts);
+parse_args(["-f", "txt" | Opts]) ->
+    set_opt(format, txt),
+    parse_args(Opts);
+parse_args(["-f", "csv" | Opts]) ->
+    set_opt(format, csv),
+    parse_args(Opts);
+parse_args(["-f", "dot" | Opts]) ->
+    set_opt(format, dot),
+    parse_args(Opts);
+parse_args(["-f" | _]) ->
     io:put_chars(standard_error, "Error: unrecognized format\n"),
     usage();
-parse_args([[$-, $f | Opt] | Opts], Accum) ->
-    parse_args(["-f", Opt] ++ Opts, Accum);
+parse_args([[$-, $f | Opt] | Opts]) ->
+    parse_args(["-f", Opt] ++ Opts);
 
-parse_args(["-n", Label | Opts], Accum) ->
-    parse_args(Opts, maps:put(label, Label, Accum));
-parse_args([[$-, $n | Opt] | Opts], Accum) ->
-    parse_args(["-n", Opt] ++ Opts, Accum);
+parse_args(["-n", Label | Opts]) ->
+    set_opt(label, Label),
+    parse_args(Opts);
+parse_args([[$-, $n | Opt] | Opts]) ->
+    parse_args(["-n", Opt] ++ Opts);
 
-parse_args(["-o", Path | Opts], Accum) ->
+parse_args(["-o", Path | Opts]) ->
     Abs = abspath(Path),
     Dir = filename:dirname(Abs),
     case filelib:is_dir(Dir) of
         true ->
-            parse_args(Opts, maps:put(out, Abs, Accum));
+            set_opt(out, Abs),
+            parse_args(Opts);
         _ ->
             io:fwrite(standard_error,
                 "Error: output path '~s' not in a directory~n", [Dir]),
             usage()
     end;
-parse_args([[$-, $o | Opt] | Opts], Accum) ->
-    parse_args(["-o", Opt] ++ Opts, Accum);
+parse_args([[$-, $o | Opt] | Opts]) ->
+    parse_args(["-o", Opt] ++ Opts);
 
-parse_args([[$-|_] = Opt|_], _) ->
+parse_args([[$-|_] = Opt | _]) ->
     io:fwrite(standard_error, "Error: unrecognized option '~s'~n", [Opt]),
     usage();
 
-parse_args([Path | Opts], Accum) ->
+parse_args([Path | Opts]) ->
     Abs = abspath(Path),
     Top = case string:to_lower(filename:basename(Abs)) of
         ?REBAR_CFG ->
@@ -482,25 +597,108 @@ parse_args([Path | Opts], Accum) ->
                     usage()
             end
     end,
-    finish_args(Opts, maps:put(top, Top, Accum)).
+    set_opt(top, Top),
+    finish_args(Opts).
 
 -spec missing_value(string()) -> no_return().
 missing_value(Opt) ->
     io:fwrite(standard_error, "Error: option '~s' requires a value~n", [Opt]),
     usage().
 
--spec abspath([string()], [string()]) -> path().
-abspath([], Accum) ->
+-spec abspath_inner([string()], [string()]) -> path().
+%%
+%%  Assembles an exploded and reversed list of path elements into an
+%%  absolute path. Used by abspath/1 and abspath/2, with little utility
+%%  otherwise.
+%%
+abspath_inner([], Accum) ->
     filename:join(Accum);
-abspath(["." | Upper], Accum) ->
-    abspath(Upper, Accum);
-abspath(["..", LastIsRoot], Accum) ->
+abspath_inner(["." | Upper], Accum) ->
+    abspath_inner(Upper, Accum);
+abspath_inner(["..", LastIsRoot], Accum) ->
     % special case to handle parent of root directory
-    abspath([LastIsRoot], Accum);
-abspath(["..", _Intermediate | Upper], Accum) ->
-    abspath(Upper, Accum);
-abspath([Cur | Upper], Accum) ->
-    abspath(Upper, [Cur] ++ Accum).
+    abspath_inner([LastIsRoot], Accum);
+abspath_inner(["..", _Intermediate | Upper], Accum) ->
+    abspath_inner(Upper, Accum);
+abspath_inner([Cur | Upper], Accum) ->
+    abspath_inner(Upper, [Cur] ++ Accum).
+
+%%
+%%  Text
+%%
+
+-spec usage_text() -> string().
+usage_text() ->
+"Usage: escript " ++ ?SCRIPT_NAME ++ " [options] [<starting-path>]
+The <starting-path> specifies a directory or " ++ ?REBAR_CFG ++ " file that
+serves as the top-level package anchor. If not specified, the current
+working directory is used.
+The following options are recognized:
+    -n <label>
+        Specifies the name to use for the top-level package. If not specified,
+        the unqualified name of the starting directory is used.
+    -o <outfile>
+        Specifies the path to a file where output will be [over]written. If
+        not specified, output is written to standard output.
+    -f {text|txt|csv|dot}
+        Specifies the output format. If not specified, and the -o option
+        is provided, the extension of the output file is used if it matches
+        one of the recognized format specifiers. If neither of the above
+        yields a useable format, the default 'text' format is written.
+    -h
+        This text is written to standard error and a non-zero result is
+        returned.
+
+If any other parameter starting with '-' is provided, or any parameters are
+found following the <starting-path>, an error message is written to standard
+error, followed by this text, and a non-zero result is returned.
+
+On success, the script returns zero.
+".
+
+-spec txt_header() -> string().
+txt_header() ->
+"#=======================================================================
+# Rebar dependencies
+#
+# Each entry is comprised of one line describing the package and one or more
+# lines detailing where it's used. The package description line consists of:
+#
+#   Owner  PackageName  Repository
+#
+# The usage lines are grouped by the revision specified in the rebar.config
+# file(s) listing the package as a dependency, and consist of:
+#
+#   RegEx  Revision  Dependent  [Dependent ...]
+#
+# If there are dependents that specify differing revisions (or RegEx revision
+# filters) they are grouped on separate lines, and each line is preceded with
+# a string of exclamation points.
+#=======================================================================
+
+".
+
+-spec dot_header() -> string().
+dot_header() ->
+    TL = get_opt(label),
+"#
+# Dependencies of " ++ TL ++ "'s " ++ ?REBAR_CFG ++ " file.
+# Generated by " ++ ?SCRIPT_NAME ++ "
+# Colors:
+#   " ++ ?DOT_COLOR_DFLT ++ " represents the top-level node.
+#   " ++ ?DOT_COLOR_SING ++ " represents a consistently versioned dependency.
+#   " ++ ?DOT_COLOR_MULT ++ " represents an inconsistently versioned dependency.
+#
+digraph \"" ++ TL ++ " dependencies\"
+{
+\tnode [shape=" ++ ?DOT_NODE_SHAPE ++ ",color=" ++ ?DOT_COLOR_DFLT ++ "];
+
+".
+
+-spec dot_footer() -> string().
+dot_footer() ->
+"}
+".
 
 %%  @end
 %%======================================================================
