@@ -267,7 +267,8 @@ write_txt_body(IoDev, [{Bflag, Name, {_, Repo}, Vlist} | Deps]) ->
     end,
     Lead = io_lib:format("~-8.4c", [LC]),
     ok = io:format(IoDev, "~-7s ~-23s ~s\n", [Own, Name, Repo]),
-    write_txt_vlist(IoDev, Deps, Lead).
+    write_txt_vlist(IoDev, Vlist, Lead),
+    write_txt_body(IoDev, Deps).
 
 write_txt_vlist(IoDev, [], _Lead) ->
     io:nl(IoDev);
@@ -374,8 +375,6 @@ format_rev({branch, S}) -> "b: " ++ S;
 format_rev({A, S})      -> io_lib:format("\t~s: ~s", [A, S]);
 format_rev([])          -> "HEAD";
 format_rev(S)           -> S.
-
-% unique_name(Name, Rev)  -> Name ++ " " ++ format_rev(Rev).
 
 %%
 %%  Collectors
@@ -658,7 +657,7 @@ On success, the script returns zero.
 
 -spec txt_header() -> string().
 txt_header() ->
-"#=======================================================================
+"#=============================================================================
 # Rebar dependencies
 #
 # Each entry is comprised of one line describing the package and one or more
@@ -674,7 +673,7 @@ txt_header() ->
 # If there are dependents that specify differing revisions (or RegEx revision
 # filters) they are grouped on separate lines, and each line is preceded with
 # a string of exclamation points.
-#=======================================================================
+#=============================================================================
 
 ".
 
