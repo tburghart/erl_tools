@@ -437,6 +437,9 @@ collect_conf_deps([Dep | Deps], Crecs) ->
         {Pkg, RE, {RT, RP, Rev}} ->
             Crec = {atom_to_list(Pkg), {RT, normalize_repo(RP)}, {RE, Rev}},
             collect_conf_deps(Deps, Crecs ++ [Crec]);
+        {Pkg, RE, Loc, _Opts} ->
+            % strip optional rebar processing options
+            collect_conf_deps([{Pkg, RE, Loc}] ++ Deps, Crecs);
         Drec ->
             error({baddep, Drec})
     end.
