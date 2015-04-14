@@ -117,6 +117,8 @@ main(Args) ->
             write_csv(IoDev, Deps);
         dot ->
             write_dot(IoDev, Deps);
+        dep ->
+            write_dep(IoDev, Deps);
         txt ->
             write_txt(IoDev, Deps)
     end,
@@ -144,6 +146,15 @@ write_dot(IoDev, Dlist) ->
     write_dot_head(IoDev, Dlist),
     write_dot_body(IoDev, Dlist),
     write_dot_foot(IoDev, Dlist).
+
+-spec write_dep(io:device(), dlist()) -> ok.
+%%
+%%  @doc    Write flat dependency list to specified IO Device.
+%%
+write_dep(IoDev, Dlist) ->
+    write_dep_head(IoDev, Dlist),
+    write_dep_body(IoDev, Dlist),
+    write_dep_foot(IoDev, Dlist).
 
 -spec write_txt(io:device(), dlist()) -> ok.
 %%
@@ -274,10 +285,29 @@ write_txt_vlist(IoDev, [], _Lead) ->
     io:nl(IoDev);
 write_txt_vlist(IoDev, [{{RE, Rev}, Deps} | Vrecs], Lead) ->
     ok = io:format(IoDev, "~s~-7s ~-15s ~s~n",
-        [Lead, RE, format_rev(Rev), format_dependents(Deps)]),
+        [Lead, RE, format_rev(Rev), format_dependents2(Deps)]),
     write_txt_vlist(IoDev, Vrecs, Lead).
 
 write_txt_foot(_IoDev, _Deps) ->
+    ok.
+
+%%
+%%  Flat List
+%%
+
+write_dep_head(_IoDev, _Deps) ->
+    ok.
+
+write_dep_body(_IoDev, []) ->
+    ok;
+write_dep_body(IoDev, [{_Bflag, Name, _Loc, Vlist} | Deps]) ->
+    Dlist = lists:sort(lists:foldl(fun({_Rev, Rdeps}, Accum) ->
+        Accum ++ Rdeps
+    end, [], Vlist)),
+    io:format(IoDev, "~s\t~s\n", [Name, format_dependents1(Dlist)]),
+    write_dep_body(IoDev, Deps).
+
+write_dep_foot(_IoDev, _Deps) ->
     ok.
 
 %%
@@ -310,7 +340,7 @@ write_csv_vlist(_IoDev, []) ->
     ok;
 write_csv_vlist(IoDev, [{{RE, Rev}, Deps} | Vrecs]) ->
     ok = io:format(IoDev, ", \"~s\", \"~s\", \"~s\"",
-        [RE, format_rev(Rev), format_dependents(Deps)]),
+        [RE, format_rev(Rev), format_dependents2(Deps)]),
     write_csv_vlist(IoDev, Vrecs).
 
 write_csv_foot(_IoDev, _Deps) ->
@@ -364,7 +394,10 @@ write_dot_foot(IoDev, _Deps) ->
 %%  Formatters
 %%
 
-format_dependents(Deps) ->
+format_dependents1(Deps) ->
+    string:join(Deps, " ").
+
+format_dependents2(Deps) ->
     string:join(Deps, "  ").
 
 format_owner(true)      -> "basho";
@@ -522,6 +555,8 @@ finish_args([]) ->
                             set_opt(format, csv);
                         ".dot" ->
                             set_opt(format, dot);
+                        ".deps" ->
+                            set_opt(format, dep);
                         _ ->
                             set_opt(format, txt)
                     end
@@ -552,6 +587,9 @@ parse_args(["-f", "csv" | Opts]) ->
     parse_args(Opts);
 parse_args(["-f", "dot" | Opts]) ->
     set_opt(format, dot),
+    parse_args(Opts);
+parse_args(["-f", "deps" | Opts]) ->
+    set_opt(format, dep),
     parse_args(Opts);
 parse_args(["-f" | _]) ->
     io:put_chars(standard_error, "Error: unrecognized format\n"),
@@ -642,7 +680,7 @@ The following options are recognized:
     -o <outfile>
         Specifies the path to a file where output will be [over]written. If
         not specified, output is written to standard output.
-    -f {text|txt|csv|dot}
+    -f {text|txt|csv|dot|deps}
         Specifies the output format. If not specified, and the -o option
         is provided, the extension of the output file is used if it matches
         one of the recognized format specifiers. If neither of the above
