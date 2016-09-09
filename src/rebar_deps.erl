@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.
+%% Copyright (c) 2015-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -110,7 +110,7 @@ main(Args) ->
             FD
     end,
     % It's tempting to resolve the function dynamically, since we know the
-    % pattern, but if running interpretted from escript the functions won't
+    % pattern, but if running interpreted from escript the functions won't
     % be found.
     case get_opt(format) of
         csv ->
@@ -122,7 +122,7 @@ main(Args) ->
         txt ->
             write_txt(IoDev, Deps)
     end,
-    case is_atom(IoDev) of
+    case erlang:is_atom(IoDev) of
         true ->
             ok;
         _ ->
@@ -270,7 +270,7 @@ write_txt_body(_IoDev, []) ->
     ok;
 write_txt_body(IoDev, [{Bflag, Name, {_, Repo}, Vlist} | Deps]) ->
     Own = format_owner(Bflag),
-    LC = case length(Vlist) of
+    LC = case erlang:length(Vlist) of
         1 ->
             32;
         _ ->
@@ -317,7 +317,7 @@ write_dep_foot(_IoDev, _Deps) ->
 write_csv_head(IoDev, Deps) ->
     MaxVers = lists:foldl(
         fun({_B, _N, _R, Vlist}, Count) ->
-            max(Count, length(Vlist))
+            erlang:max(Count, erlang:length(Vlist))
         end, 0, Deps),
     ok = io:put_chars(IoDev, "Owner, Package, Repo"),
     ok = lists:foreach(
@@ -357,7 +357,7 @@ write_dot_head(IoDev, Deps) ->
 write_dot_attr(IoDev, []) ->
     io:nl(IoDev);
 write_dot_attr(IoDev, [{Bflag, Name, _Repo, Vlist} | Deps]) ->
-    Color = case length(Vlist) > 1 of
+    Color = case erlang:length(Vlist) > 1 of
         true ->
             ?DOT_COLOR_MULT;
         _ ->
@@ -468,13 +468,14 @@ collect_conf_deps([], Crecs) ->
 collect_conf_deps([Dep | Deps], Crecs) ->
     case Dep of
         {Pkg, RE, {RT, RP, Rev}} ->
-            Crec = {atom_to_list(Pkg), {RT, normalize_repo(RP)}, {RE, Rev}},
+            Crec = {erlang:atom_to_list(Pkg),
+                {RT, normalize_repo(RP)}, {RE, Rev}},
             collect_conf_deps(Deps, Crecs ++ [Crec]);
         {Pkg, RE, Loc, _Opts} ->
             % strip optional rebar processing options
             collect_conf_deps([{Pkg, RE, Loc}] ++ Deps, Crecs);
         Drec ->
-            error({baddep, Drec})
+            erlang:error({baddep, Drec})
     end.
 
 -spec collect_deps_files(path(), plist()) -> plist().
